@@ -1,0 +1,297 @@
+Daniel Stelter, [09.01.19 17:10]
+#include <FrameStream.h>
+#include <Frameiterator.h>
+#include <avr/io.h>
+#include "IMU.h"
+#include "everytime.h"
+#include "Motor.h"
+#include "Display.h"
+#include "Distance.h"
+#include <math.h>
+
+#define OUTPUT__BAUD_RATE 9600
+FrameStream frm(Serial1);
+
+// Forward declarations
+void InitGUI();
+
+// hierarchical runnerlist, that connects the gui elements with
+// callback methods
+declarerunnerlist(GUI);
+
+// First level will be called by frm.run (if a frame is recived)
+beginrunnerlist();
+fwdrunner(!g, GUIrunnerlist); //forward !g to the second level (GUI)
+callrunner(!!, InitGUI);
+fwdrunner(ST, stickdata);
+endrunnerlist();
+
+// GUI level
+beginrunnerlist(GUI);
+callrunner(es, CallbackSTOP);
+callrunner(ms, CallbackSTART);
+endrunnerlist();
+
+int8_t left;
+int8_t right;
+
+void stickdata(char* str, size_t length)
+{
+    // str contains a string of two numbers ranging from -127 to +127
+    // indicating left and right motor values
+    
+    int8_t left = atoi(strtok(str, ","));
+    int8_t right = atoi(strtok(NULL, ","));
+    
+    setMotors(left, right);
+}
+
+void CallbackSTOP()
+{
+    deactivateMotors();
+}
+
+
+void CallbackSTART()
+{
+  activateMotors();
+}
+
+/*
+ * @brief initialises the GUI of ArduinoView
+ *
+ * In this function, the GUI, is configured. For this, Arduinoview shorthand,
+ * HTML as well as embedded JavaScript can be used.
+ */
+void InitGUI()
+{
+    delay(500);
+
+    //frm.print(F("!h<h1>PKeS Exercise 3</h1>"));
+    //frm.end();
+
+    frm.print(F("!SbesvSTOP"));
+    frm.end();
+
+    frm.print(F("!SbmsvSTART"));
+    frm.end();
+    //this implements a joystick field using HTML SVG and JS
+    frm.print(F("!H"
+      "<div><style>svg * { pointer-events: none; }</style>\n"
+      "<div style='display:inline-block'> <div id='state'> </div>\n"
+      "<svg id='stick' width='300' height='300' viewBox='-150 -150 300 300' style='background:rgb(200,200,255)' >\n"
+      "<line id='pxy' x1='0' y1='0' x2='100' y2='100' style='stroke:rgb(255,0,0);stroke-width:3' />\n"
+      "<circle id='cc' cx='0' cy='0' r='3'  style='stroke:rgb(0,0,0);stroke-width:3' />\n"
+      "</svg></div><div style='display:inline-block'><div id='info0'></div><div id='info1'></div><div id='info2'></div></div></div>\n"
+      "<script>\n"
+        "var getEl=function(x){return document.getElementById(x)};\n"
+        "var setEl=function(el,attr,val){(el).setAttributeNS(null,attr,val)};\n"
+        "var stick=getEl('stick');\n"
+        "function sticktransform(x,y){\n"
+          "x = x-150;\n"
+          "y = -(y-150);\n"
+          "setstick(x,y);\n"
+        "}\n"
+        "function setstick(x,y){\n"
+          "setpointer(x,y);\n"
+          "l = Math.floor(Math.min(127,Math.max(-127,y + x/2)));\n"
+          "r = Math.floor(Math.min(127,Math.max(-127,y - x/2)));\n"
+          "setStateDisplay(x,y,l,r);\n"
+          "sendframe(\"ST\"+l +\",\"+r);\n"
+        "}\n"
+        "function setStateDisplay(x,y,l,r){\n"
+          "msg=getEl('state');\n"
+          "msg.innerHTML= 'x= '+ x +' y= '+ y +' l= '+ l +' r= '+ r ;\n"
+        "}\n"
+        "function setpointer(x,y){\n"
+          "pxy=getEl('pxy');\n"
+          "setEl(pxy,'x2',x);\n"
+          "setEl(pxy,'y2',-y);\n"
+        "}\n"
+        "stick.onmousemove=function(e){\n"
+          "if( e.buttons == 1 ){\n"
+            "sticktransform(e.offsetX,e.offsetY);\n"
+        "}};\n"
+        "stick.onmousedown=function(e){\n"
+          "if( e.buttons == 1 ){\n"
+            "sticktransform(e.offsetX,e.offsetY);\n"
+        "}};\n"
+        "stick.onmouseup=function(e){\n"
+          "setstick(0,0);\n"
+        "};\n"
+        "stick.onmouseleave=function(e){\n"
+          "setstick(0,0);\n"
+        "};\n"
+        "function sendframe(msg){\n"
+          "ArduinoView.sendMessage(ArduinoView._createSerialFrame(msg))\n"
+        "}\n"
+        "setstick(0,0);\n"
+      "</script>\n"));
+    frm.end();
+    
+    // distance
+    frm.print("!SGdistance");
+    frm.end();
+    // accelerator
+    frm.print("!SGaccel");
+    frm.end();
+    // gyro(s)
+    frm.print("!SGrotate");
+    frm.end();
+}
+
+Daniel Stelter, [09.01.19 17:10]
+/*
+ * @brief Initialisation
+ *
+ * Implement basic initialisation of the program.
+ */
+IMUdataf imuoffset;
+
+void setup()
+{
+    delay(1000);
+
+    //prepare Serial interfaces
+    Serial.begin(OUTPUT__BAUD_RATE);
+    Serial1.begin(OUTPUT__BAUD_RATE);
+
+    Serial.println(F("Willkommen zur PKeS Übung"));
+
+    //request reset of GUI
+    frm.print("!!");
+    frm.end();
+
+    delay(500);
+
+    // initialise Motors, 8-Segment-Display, ADCs and IMU
+    initMotors();
+    initDisplay();
+    configADC();
+    initializeIMU();
+    
+    // setup IMU
+    resetIMUoffset(imuoffset);
+    struct IMUdataf IMUscaled;
+    for (int i = 0; i < 500; i++) // warmup
+      readIMUscale(IMUscaled);
+    
+    // init buttons
+    DDRF &= ~((1<<DDF6) | (1<<DDF7));
+    DDRE &= ~(1<<DDE6);
+    DDRB &= ~(1<<DDB7);
+    
+    PORTF |= (1<<PORTF6) | (1<<PORTF7);
+    PORTE |= 1<<PORTE6;
+    PORTB |= 1<<PORTB7;
+}
+
+/*
+ *  @brief Main loop
+ *
+ *  This function will be called repeatedly and shall therefore implement the
+ *  main behavior of the program.
+ */
+
+void resetIMUoffset(IMUdataf& d) {
+  d.accel_x = 0;
+  d.accel_y = 0;
+  d.accel_z = 0;
+  d.gyro_x = 0;
+  d.gyro_y = 0;
+  d.gyro_z = 0;
+}
+
+int time = 0;
+float velocity = 0;
+float rotation = 0;
+void loop()
+{
+    // read & run ArduinoView Frames
+    while(frm.run());
+    
+    time++;
+    
+    uint16_t distSR = linearizeSR(readADC(0));
+    uint16_t distLR = linearizeLR(readADC(1));
+    
+    struct IMUdataf IMUscaled;  // construct struct
+    readIMUscale(IMUscaled);    // set struct
+    
+    
+    imuoffset.accel_x += IMUscaled.accel_x;
+    imuoffset.accel_y += IMUscaled.accel_y;
+    imuoffset.gyro_z += IMUscaled.gyro_z;
+    
+    
+    every(100) {
+      /* CALCULATE SOME STUFF */
+      rotation += imuoffset.gyro_z / (float)time;
+      float v_X = imuoffset.accel_x / (float)time;
+      float v_Y = imuoffset.accel_y / (float)time;
+      velocity = sqrt( (v_X * v_X) + (v_Y * v_Y));
+      resetIMUoffset(imuoffset);
+      
+      
+      /* WRITE SOME STUFF */
+      frm.print(F("!jgetEl('info2').innerHTML='"));
+      frm.print(F("SR: "));
+      frm.print(distSR);
+      frm.print(F(", LR:"));
+      frm.print(distLR);
+      frm.print(F(", Rotation:"));
+      frm.print(rotation);
+      frm.print("';");
+      frm.end();
+      
+      
+      /* CHECK BUTTONS */
+      if (0 == (PINF & (1<<PINF7))){
+        writeValueToDisplay((int)distLR);
+        Serial.println("Button 1");
+      }
+      else if (0 == (PINF & (1<<PINF6))){
+        writeValueToDisplay((int)distSR);
+        Serial.println("Button 2");
+      }
+      else if (0 == (PINE & (1<<PINE6))){
+        writeValueToDisplay(rotation);
+        Serial.println("Button 3");
+      }
+      //else if (0 == (PINB & (1<<PINB7))){
+        //rotation = 0;
+        //Serial.println("Button 4");
+      //}
+      else if ((int)distSR < 20)
+        writeValueToDisplay((int)distSR);
+      else
+        writeValueToDisplay((int)distLR);
+    }
+    
+    every(500) {  // write diagramms
+      // distance
+      frm.print(F("!ddistance"));
+      frm.print((int)distSR);
+      frm.print(F(","));
+      frm.print((int)distLR);
+      frm.end();
+      
+      // acceleration
+      frm.print(F("!daccel"));
+      frm.print(IMUscaled.accel_x);
+      frm.print(F("."));
+      frm.print(IMUscaled.accel_y);
+      frm.print(F(","));
+      frm.print(IMUscaled.accel_z);
+      frm.end();
+      
+      // gyro(s)
+      frm.print(F("!drotate"));
+      frm.print(IMUscaled.gyro_x);
+      frm.print(F("."));
+      frm.print(IMUscaled.gyro_y);
+      frm.print(F(","));
+      frm.print(IMUscaled.gyro_z);
+      frm.end();
+    }
+}
